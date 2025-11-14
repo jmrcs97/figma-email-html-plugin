@@ -102,6 +102,90 @@ class FigmaPluginParser {
     }).join(";");
   }
 
+  // --- NOVOS MÉTODOS AUXILIARES PARA PROCESSAMENTO DE TEXTO ---
+
+  private getSegmentStyleObject(style: any, parentBgColor: RgbColor): { [key: string]: string } {
+    const styles: { [key: string]: string } = {};
+    if (style.fills && style.fills.length > 0) {
+        const { hex: colorHex } = this.getEffectiveBackgroundColorForFills(style.fills, parentBgColor);
+        if (colorHex) styles['color'] = colorHex;
+    }
+    if (style.fontName?.family) {
+        styles['font-family'] = `'${style.fontName.family}', sans-serif`;
+        const f_style = style.fontName.style.toLowerCase();
+        styles['font-weight'] = f_style.includes('bold') ? '700' : '400';
+        styles['font-style'] = f_style.includes('italic') ? 'italic' : 'normal';
+    }
+    if (style.fontSize) styles['font-size'] = `${Math.round(style.fontSize)}px`;
+    if (style.lineHeight?.unit !== 'AUTO') {
+        if (style.lineHeight.unit === 'PIXELS') styles['line-height'] = `${Math.round(style.lineHeight.value)}px`;
+        else if (style.lineHeight.unit === 'PERCENT') styles['line-height'] = `${Math.round(style.lineHeight.value)}%`;
+    }
+    styles['text-decoration'] = style.textDecoration === "UNDERLINE" ? 'underline' : 'none';
+    return styles;
+  }
+  
+  private styleObjectToCssString(styleObj: { [key: string]: string }): string {
+    if (!styleObj || Object.keys(styleObj).length === 0) return "";
+    // Alterado de Object.entries para Object.keys para garantir compatibilidade
+    const css = Object.keys(styleObj)
+        .map(key => `${key}:${styleObj[key]}`)
+        .join(';');
+    return css ? `${css};` : '';
+}
+
+  private diffStyleObjects(baseStyle: { [key: string]: string }, segmentStyle: { [key: string]: string }): { [key: string]: string } {
+      const diff: { [key: string]: string } = {};
+      for (const key in segmentStyle) {
+          if (baseStyle[key] !== segmentStyle[key]) {
+              diff[key] = segmentStyle[key];
+          }
+      }
+      return diff;
+  }
+  
+  private processTextNode(node: TextNode, parentBgColor: RgbColor): { baseStyle: { [key: string]: string }, innerHtml: string } {
+      if (!node.characters?.trim()) {
+          return { baseStyle: {}, innerHtml: "" };
+      }
+      const segments = node.getStyledTextSegments(['fontName', 'fontSize', 'fills', 'lineHeight', 'textDecoration']);
+      if (segments.length === 0) {
+          return { baseStyle: {}, innerHtml: "" };
+      }
+      const firstValidSegment = segments.find(s => typeof s.fontName !== 'symbol');
+      if (!firstValidSegment) {
+          return { baseStyle: {}, innerHtml: "" };
+      }
+      const baseStyle = this.getSegmentStyleObject(firstValidSegment, parentBgColor);
+      let htmlOutput = "";
+      for (const segment of segments) {
+          if (typeof segment.fontName === 'symbol') continue;
+          
+          const segmentStyle = this.getSegmentStyleObject(segment, parentBgColor);
+          const styleDiff = this.diffStyleObjects(baseStyle, segmentStyle);
+          const sanitizedChars = segment.characters.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br />");
+          const finalContent = bulletCharacterMap[sanitizedChars.trim()] || sanitizedChars;
+          if (!finalContent) continue;
+
+          if (Object.keys(styleDiff).length === 0) {
+              htmlOutput += finalContent;
+          } else {
+              let tag = 'span';
+              const diffKeys = Object.keys(styleDiff);
+              if (diffKeys.length === 1 && diffKeys[0] === 'font-weight' && styleDiff['font-weight'] === '700') {
+                tag = 'strong';
+              } else if (diffKeys.length === 1 && diffKeys[0] === 'font-style' && styleDiff['font-style'] === 'italic') {
+                tag = 'i';
+              }
+              const diffCss = this.styleObjectToCssString(styleDiff);
+              htmlOutput += `<${tag} ${diffCss ? `style="${diffCss}"` : ''}>${finalContent}</${tag}>`;
+          }
+      }
+      return { baseStyle, innerHtml: htmlOutput };
+  }
+
+  // --- FIM DOS MÉTODOS AUXILIARES ---
+
   private getBorderStyles(node: SceneNode): string | null {
     if (!("strokes" in node) || !Array.isArray(node.strokes) || node.strokes.length === 0 || !("strokeWeight" in node) || typeof node.strokeWeight !== 'number' || node.strokeWeight === 0) {
       return null;
@@ -221,12 +305,15 @@ class FigmaPluginParser {
           if (index > 0 && gapWithinGroup > 2) {
             textRows.push(`<tr><td height="${gapWithinGroup}" style="height:${gapWithinGroup}px; font-size:${gapWithinGroup}px; line-height:${gapWithinGroup}px;">&nbsp;</td></tr>`);
           }
-          const contentHtml = await this.renderTextContent(textNode, parentBgColor);
-          if (contentHtml) {
-            const textAlign = (textNode.textAlignHorizontal || 'LEFT').toLowerCase();
-            const styles = this.sanitizeStyles(this.cleanZeroValueStyles([this.getBorderStyles(textNode)].filter(Boolean).join(";")));
-            const finalTdStyle = `${styles ? `${styles};` : ''}text-align: ${textAlign};`;
-            textRows.push(`<tr><td align="${textAlign}" style="${finalTdStyle}">${contentHtml}</td></tr>`);
+          // --- LÓGICA DE TEXTO ATUALIZADA ---
+          const { baseStyle, innerHtml } = this.processTextNode(textNode, parentBgColor);
+          if (innerHtml) {
+              const textAlign = (textNode.textAlignHorizontal || 'LEFT').toLowerCase();
+              const baseStyleCss = this.styleObjectToCssString(baseStyle);
+              const borderCss = this.getBorderStyles(textNode) || "";
+              let tdStyle = this.sanitizeStyles(this.cleanZeroValueStyles(`text-align:${textAlign};${baseStyleCss}${borderCss}`));
+              if (tdStyle && !tdStyle.endsWith(';')) tdStyle += ';';
+              textRows.push(`<tr><td align="${textAlign}" style="${tdStyle}">${innerHtml}</td></tr>`);
           }
           lastTextNodeInGroupBottomY = textNode.y + textNode.height;
         }
@@ -270,7 +357,8 @@ class FigmaPluginParser {
       return innerHtml;
     }
 
-    const tableStyles = this.sanitizeStyles(this.cleanZeroValueStyles([bgColorHex ? `background-color:${bgColorHex}` : null, this.getBorderStyles(node)].filter(Boolean).join(";")));
+    let tableStyles = this.sanitizeStyles(this.cleanZeroValueStyles([bgColorHex ? `background-color:${bgColorHex}` : null, this.getBorderStyles(node)].filter(Boolean).join(";")));
+    if (tableStyles) tableStyles += ';';
     const paddingTopHtml = paddingTop > 0 ? `<tr><td height="${paddingTop}" style="font-size:${paddingTop}px; line-height:${paddingTop}px;">&nbsp;</td></tr>` : "";
     const paddingBottomHtml = paddingBottom > 0 ? `<tr><td height="${paddingBottom}" style="font-size:${paddingBottom}px; line-height:${paddingBottom}px;">&nbsp;</td></tr>` : "";
     const finalInnerHtml = `${paddingTopHtml}${innerHtml ? `<tr><td>${innerHtml}</td></tr>` : ''}${paddingBottomHtml}`;
@@ -300,53 +388,36 @@ class FigmaPluginParser {
 
   private async renderText(node: TextNode, parentBgColor: RgbColor): Promise<string> {
     if (!node.characters?.trim()) return "";
+    
+    // --- LÓGICA DE TEXTO ATUALIZADA ---
+    const { baseStyle, innerHtml } = this.processTextNode(node, parentBgColor);
+    if (!innerHtml) return "";
+
     const textAlign = (node.textAlignHorizontal || 'LEFT').toLowerCase();
-    const contentHtml = await this.renderTextContent(node, parentBgColor);
-    const containerStyles = this.sanitizeStyles(this.cleanZeroValueStyles([this.getBorderStyles(node)].filter(Boolean).join(";")));
-    const finalTdStyle = `${containerStyles ? `${containerStyles};` : ''}text-align: ${textAlign};`;
-    return `<table cellpadding="0" cellspacing="0" border="0" width="100%"><tr><td align="${textAlign}" style="${finalTdStyle}">${contentHtml}</td></tr></table>`;
+    const baseStyleCss = this.styleObjectToCssString(baseStyle);
+    const borderCss = this.getBorderStyles(node) || "";
+    
+    let tdStyle = this.sanitizeStyles(this.cleanZeroValueStyles(`text-align:${textAlign};${baseStyleCss}${borderCss}`));
+    if (tdStyle && !tdStyle.endsWith(';')) tdStyle += ';';
+    
+    return `<table cellpadding="0" cellspacing="0" border="0" width="100%"><tr><td align="${textAlign}" style="${tdStyle}">${innerHtml}</td></tr></table>`;
   }
 
-  private async renderTextContent(node: TextNode, parentBgColor: RgbColor): Promise<string> {
-    if (!node.characters?.trim()) return "";
-    let htmlOutput = "";
-    const segments = node.getStyledTextSegments(['fontName', 'fontSize', 'fills', 'lineHeight', 'textDecoration']);
-    for (const segment of segments) {
-      if (typeof segment.fontName === "symbol") continue;
-      const styleCss = this.styleObjectToInlineCss(segment, parentBgColor);
-      const sanitizedChars = segment.characters.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br />");
-      const finalContent = bulletCharacterMap[sanitizedChars.trim()] || sanitizedChars;
-      htmlOutput += styleCss ? `<span style="${styleCss}">${finalContent}</span>` : finalContent;
-    }
-    return htmlOutput;
-  }
-  
-  private styleObjectToInlineCss(style: any, parentBgColor: RgbColor): string {
-    const styles: string[] = [];
-    if (style.fills && style.fills.length > 0) {
-      const { hex: colorHex } = this.getEffectiveBackgroundColorForFills(style.fills, parentBgColor);
-      if (colorHex) styles.push(`color: ${colorHex}`);
-    }
-    if (style.fontName?.family) {
-      styles.push(`font-family: '${style.fontName.family}', sans-serif`);
-      if (style.fontName.style.toLowerCase().includes('bold')) styles.push(`font-weight: 700`);
-    }
-    if (style.fontSize) styles.push(`font-size: ${Math.round(style.fontSize)}px`);
-    if (style.lineHeight?.unit !== 'AUTO') {
-      if (style.lineHeight.unit === 'PIXELS') styles.push(`line-height: ${Math.round(style.lineHeight.value)}px`);
-      else if (style.lineHeight.unit === 'PERCENT') styles.push(`line-height: ${Math.round(style.lineHeight.value)}%`);
-    }
-    if (style.textDecoration === "UNDERLINE") styles.push("text-decoration: underline");
-    return this.sanitizeStyles(this.cleanZeroValueStyles(styles.join(";")));
-  }
-  
   private async renderBulletPoint(node: FrameNode, parentBgColor: RgbColor): Promise<string> {
     const bulletNode = node.children[0] as TextNode;
     const textNode = node.children[1] as TextNode;
     const itemSpacing = typeof node.itemSpacing === 'number' ? node.itemSpacing : 8;
-    const bulletHtml = await this.renderTextContent(bulletNode, parentBgColor);
-    const textHtml = await this.renderTextContent(textNode, parentBgColor);
-    return `<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation"><tr><td style="width:1%;" valign="top">${bulletHtml}</td><td width="${itemSpacing}" style="width: ${itemSpacing}px;">&nbsp;</td><td valign="top">${textHtml}</td></tr></table>`;
+    
+    // --- LÓGICA DE TEXTO ATUALIZADA ---
+    const { baseStyle: bulletBaseStyle, innerHtml: bulletHtml } = this.processTextNode(bulletNode, parentBgColor);
+    let bulletTdStyle = this.sanitizeStyles(`width:1%;${this.styleObjectToCssString(bulletBaseStyle)}`);
+    if (bulletTdStyle && !bulletTdStyle.endsWith(';')) bulletTdStyle += ';';
+    
+    const { baseStyle: textBaseStyle, innerHtml: textHtml } = this.processTextNode(textNode, parentBgColor);
+    let textTdStyle = this.sanitizeStyles(this.styleObjectToCssString(textBaseStyle));
+    if (textTdStyle && !textTdStyle.endsWith(';')) textTdStyle += ';';
+
+    return `<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation"><tr><td style="${bulletTdStyle}" valign="top">${bulletHtml}</td><td width="${itemSpacing}" style="width: ${itemSpacing}px;">&nbsp;</td><td style="${textTdStyle}" valign="top">${textHtml}</td></tr></table>`;
   }
 
   private renderShape(node: SceneNode, parentBgColor: RgbColor): string {
@@ -354,7 +425,8 @@ class FigmaPluginParser {
     if (width < 1 || height < 1) return "";
     const { hex: bgColorHex } = this.getEffectiveBackgroundColor(node, parentBgColor);
     const finalHeight = Math.round(height);
-    const cellStyles = this.sanitizeStyles(this.cleanZeroValueStyles([bgColorHex ? `background-color:${bgColorHex}` : null, `height:${finalHeight}px;`, `font-size:1px;`, `line-height:1px;`, this.getBorderStyles(node)].filter(Boolean).join(";")));
+    let cellStyles = this.sanitizeStyles(this.cleanZeroValueStyles([bgColorHex ? `background-color:${bgColorHex}` : null, `height:${finalHeight}px;`, `font-size:1px;`, `line-height:1px;`, this.getBorderStyles(node)].filter(Boolean).join(";")));
+    if (cellStyles && !cellStyles.endsWith(';')) cellStyles += ';';
     return `<table width="100%" height="${finalHeight}" cellpadding="0" cellspacing="0" border="0"><tr><td ${bgColorHex ? `bgcolor="${bgColorHex}"` : ''} ${cellStyles ? `style="${cellStyles}"` : ''}>&nbsp;</td></tr></table>`;
   }
 
