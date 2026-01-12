@@ -6,11 +6,7 @@ const bulletCharacterMap: { [key: string]: string } = {
 
 type RgbColor = { r: number; g: number; b: number };
 type RgbaColor = { r: number; g: number; b: number; a: number };
-type ImageExportMode = 'placeholder' | 'base64' | 'zip';
-type ImageAsset = {
-  name: string;
-  data: Uint8Array;
-};
+type ImageExportMode = 'placeholder' | 'base64';
 
 function figmaColorToHex(color: RgbColor): string {
   const toHex = (c: number) => ("0" + Math.round(c * 255).toString(16)).slice(-2);
@@ -68,16 +64,12 @@ async function collectAndLoadAllFonts(nodes: readonly SceneNode[]) {
 }
 
 class FigmaPluginParser {
-  private imageAssets: ImageAsset[] = [];
-  private imageCounter = 0;
   private mobileFluid = false;
+  private useLiteralWidth = false;
 
-  constructor(mobileFluid: boolean) {
+  constructor(mobileFluid: boolean, useLiteralWidth: boolean) {
     this.mobileFluid = mobileFluid;
-  }
-
-  public getCollectedImageAssets(): ImageAsset[] {
-    return this.imageAssets;
+    this.useLiteralWidth = useLiteralWidth;
   }
 
   private sanitizeStyles(styleStr: string): string {
@@ -322,13 +314,13 @@ class FigmaPluginParser {
     }
   }
 
-  private async renderStackedChildren(parentNode: FrameNode | GroupNode | ComponentNode | InstanceNode, parentWidth: number, parentBgColor: RgbColor, imageExportMode: ImageExportMode): Promise<string> {
+  private async getStackedRows(parentNode: FrameNode | GroupNode | ComponentNode | InstanceNode, parentWidth: number, parentBgColor: RgbColor, imageExportMode: ImageExportMode): Promise<string[]> {
     const children = ("children" in parentNode ? [...parentNode.children] : []).filter(c => c.visible);
     if ('layoutMode' in parentNode && parentNode.layoutMode !== 'VERTICAL') {
       children.sort((a, b) => a.y - b.y);
     }
 
-    if (children.length === 0) return "";
+    if (children.length === 0) return [];
 
     const paddingLeft = ('paddingLeft' in parentNode ? parentNode.paddingLeft : 0) as number;
     const paddingRight = ('paddingRight' in parentNode ? parentNode.paddingRight : 0) as number;
@@ -336,18 +328,17 @@ class FigmaPluginParser {
     const availableWidth = parentWidth - paddingLeft - paddingRight;
 
     // --- Optimization: Unwrap Single Child ---
-    // If there is only 1 child, and it fits perfectly (no extra gap from top padding, no side padding),
-    // we can return the child directly and let the parent container handle it.
     if (children.length === 1) {
       const child = children[0];
       const verticalGap = Math.round(child.y - paddingTop);
 
-      // If no side padding in this container AND no weird vertical gap
       if (paddingLeft === 0 && paddingRight === 0 && verticalGap <= 2) {
-        return this.renderNode(child, availableWidth, parentBgColor, imageExportMode);
+        const childHtml = await this.renderNode(child, availableWidth, parentBgColor, imageExportMode);
+        return childHtml ? [`<tr><td>${childHtml}</td></tr>`] : [];
       }
     }
 
+    const colSpan = 1 + (paddingLeft > 0 ? 1 : 0) + (paddingRight > 0 ? 1 : 0);
     const rows: string[] = [];
     let lastBottomY = paddingTop;
 
@@ -355,7 +346,7 @@ class FigmaPluginParser {
       const child = children[i];
       const verticalGap = Math.round(child.y - lastBottomY);
       if (verticalGap > 2) {
-        rows.push(`<tr><td height="${verticalGap}" style="height:${verticalGap}px; font-size:${verticalGap}px; line-height:${verticalGap}px;" colspan="3">&nbsp;</td></tr>`);
+        rows.push(`<tr><td height="${verticalGap}" style="height:${verticalGap}px; font-size:${verticalGap}px; line-height:${verticalGap}px;" colspan="${colSpan}">&nbsp;</td></tr>`);
       }
 
       const leftSpacer = paddingLeft > 0 ? `<td class="gutter" width="${paddingLeft}" style="width: ${paddingLeft}px;">&nbsp;</td>` : "";
@@ -385,13 +376,17 @@ class FigmaPluginParser {
             const borderCss = this.getBorderStyles(textNode) || "";
             let tdStyle = this.sanitizeStyles(this.cleanZeroValueStyles(`text-align:${textAlign};${baseStyleCss}${borderCss}`));
             if (tdStyle && !tdStyle.endsWith(';')) tdStyle += ';';
-            textRows.push(`<tr><td align="${textAlign}" style="${tdStyle}">${innerHtml}</td></tr>`);
+            textRows.push(`<tr><td align="${textAlign}" ${tdStyle ? `style="${tdStyle}"` : ''}>${innerHtml}</td></tr>`);
           }
           lastTextNodeInGroupBottomY = textNode.y + textNode.height;
         }
 
-        const groupHtml = `<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">${textRows.join('')}</table>`;
-        rows.push(`<tr>${leftSpacer}<td>${groupHtml}</td>${rightSpacer}</tr>`);
+        if (paddingLeft === 0 && paddingRight === 0) {
+          rows.push(...textRows);
+        } else {
+          const groupHtml = `<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">${textRows.join('')}</table>`;
+          rows.push(`<tr>${leftSpacer}<td>${groupHtml}</td>${rightSpacer}</tr>`);
+        }
 
         i = j - 1;
         lastBottomY = lastTextNodeInGroupBottomY;
@@ -403,7 +398,12 @@ class FigmaPluginParser {
         lastBottomY = child.y + child.height;
       }
     }
+    return rows;
+  }
 
+  private async renderStackedChildren(parentNode: FrameNode | GroupNode | ComponentNode | InstanceNode, parentWidth: number, parentBgColor: RgbColor, imageExportMode: ImageExportMode): Promise<string> {
+    const rows = await this.getStackedRows(parentNode, parentWidth, parentBgColor, imageExportMode);
+    if (rows.length === 0) return "";
     return `<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation">${rows.join('')}</table>`;
   }
 
@@ -412,43 +412,63 @@ class FigmaPluginParser {
     const children = "children" in node ? node.children.filter(c => c.visible) : [];
     if (children.length === 0 && !bgColorHex && !this.getBorderStyles(node)) return "";
 
-    let innerHtml: string;
     const layoutMode = 'layoutMode' in node ? node.layoutMode : 'NONE';
-
-    if (layoutMode === "HORIZONTAL") {
-      innerHtml = await this.renderHorizontalChildren(node as FrameNode, parentWidth, effectiveBgRgb, imageExportMode);
-    } else {
-      innerHtml = await this.renderStackedChildren(node, parentWidth, effectiveBgRgb, imageExportMode);
-    }
-
-    const hasStyles = !!bgColorHex || !!this.getBorderStyles(node);
     const paddingTop = 'paddingTop' in node ? Math.round((node as any).paddingTop as number) : 0;
     const paddingBottom = 'paddingBottom' in node ? Math.round((node as any).paddingBottom as number) : 0;
 
-    if (!hasStyles && paddingTop === 0 && paddingBottom === 0 && !isRoot) {
-      return innerHtml;
-    }
-
+    // Setup Container Styles
     let tableStyles = this.sanitizeStyles(this.cleanZeroValueStyles([bgColorHex ? `background-color:${bgColorHex}` : null, this.getBorderStyles(node)].filter(Boolean).join(";")));
     if (tableStyles) tableStyles += ';';
-    const paddingTopHtml = paddingTop > 0 ? `<tr><td height="${paddingTop}" style="font-size:${paddingTop}px; line-height:${paddingTop}px;">&nbsp;</td></tr>` : "";
-    const paddingBottomHtml = paddingBottom > 0 ? `<tr><td height="${paddingBottom}" style="font-size:${paddingBottom}px; line-height:${paddingBottom}px;">&nbsp;</td></tr>` : "";
-    const finalInnerHtml = `${paddingTopHtml}${innerHtml ? `<tr><td>${innerHtml}</td></tr>` : ''}${paddingBottomHtml}`;
 
-    // --- MOBILE FLUID LOGIC ---
     const width = isRoot ? parentWidth : Math.min(node.width, parentWidth);
     let tableAttributes: string;
-
-    // If it's the root node or a major container and Mobile Fluid is on
     if (this.mobileFluid && (isRoot || width > 280)) {
-      // Use max-width for fluid behavior
       tableAttributes = `width="100%" style="width: 100%; max-width: ${width}px; ${tableStyles || ''}"`;
     } else {
-      // Strict fixed width
-      tableAttributes = `width="${width}" style="${tableStyles || ''}"`;
+      if (this.useLiteralWidth) {
+        tableAttributes = `width="${width}" ${tableStyles ? `style="${tableStyles}"` : ''}`;
+      } else {
+        tableAttributes = `width="100%" ${tableStyles ? `style="width: 100%; ${tableStyles}"` : (tableStyles ? `style="${tableStyles}"` : '')}`;
+      }
       if (bgColorHex) tableAttributes += ` bgcolor="${bgColorHex}"`; // legacy attr backup
     }
 
+    // --- Optimization: Merge Wrapper and Content for Vertical Layout ---
+    if (layoutMode !== "HORIZONTAL") { // Stacking
+      // Check strict single child (unwrapping logic inside getStackedRows returns <tr><td>...</td></tr>, 
+      // but if we want to return raw child without ANY table wrapper if container is invisible, we can check here)
+      if (children.length === 1 && !bgColorHex && !this.getBorderStyles(node)) {
+        const paddingLeft = ('paddingLeft' in node ? node.paddingLeft : 0) as number;
+        const paddingRight = ('paddingRight' in node ? node.paddingRight : 0) as number;
+        const childGap = children[0].y - paddingTop;
+        // If simple wrapper, check if we can skip entire table structure
+        if (paddingLeft === 0 && paddingRight === 0 && childGap <= 2 && paddingTop === 0 && paddingBottom === 0 && !isRoot) {
+          return this.renderNode(children[0], parentWidth, parentBgColor, imageExportMode);
+        }
+      }
+
+      const rows = await this.getStackedRows(node, parentWidth, effectiveBgRgb, imageExportMode);
+      if (rows.length === 0 && !bgColorHex && !this.getBorderStyles(node)) return "";
+
+      const paddingLeft = ('paddingLeft' in node ? node.paddingLeft : 0) as number;
+      const paddingRight = ('paddingRight' in node ? node.paddingRight : 0) as number;
+      const colSpan = 1 + (paddingLeft > 0 ? 1 : 0) + (paddingRight > 0 ? 1 : 0);
+
+      // Add Padding Rows to the main set
+      const paddingTopHtml = paddingTop > 0 ? `<tr><td height="${paddingTop}" style="font-size:${paddingTop}px; line-height:${paddingTop}px;" colspan="${colSpan}">&nbsp;</td></tr>` : "";
+      const paddingBottomHtml = paddingBottom > 0 ? `<tr><td height="${paddingBottom}" style="font-size:${paddingBottom}px; line-height:${paddingBottom}px;" colspan="${colSpan}">&nbsp;</td></tr>` : "";
+
+      return `<table ${tableAttributes} cellpadding="0" cellspacing="0" border="0" role="presentation">${paddingTopHtml}${rows.join('')}${paddingBottomHtml}</table>`;
+    }
+
+    // --- Horizontal Layout ---
+    const innerHtml = await this.renderHorizontalChildren(node as FrameNode, parentWidth, effectiveBgRgb, imageExportMode);
+
+    // Padding for Horizontal Container
+    const paddingTopHtml = paddingTop > 0 ? `<tr><td height="${paddingTop}" style="font-size:${paddingTop}px; line-height:${paddingTop}px;">&nbsp;</td></tr>` : "";
+    const paddingBottomHtml = paddingBottom > 0 ? `<tr><td height="${paddingBottom}" style="font-size:${paddingBottom}px; line-height:${paddingBottom}px;">&nbsp;</td></tr>` : "";
+
+    const finalInnerHtml = `${paddingTopHtml}${innerHtml ? `<tr><td>${innerHtml}</td></tr>` : ''}${paddingBottomHtml}`;
     return `<table ${tableAttributes} cellpadding="0" cellspacing="0" border="0" role="presentation">${finalInnerHtml}</table>`;
   }
 
@@ -484,7 +504,7 @@ class FigmaPluginParser {
     let tdStyle = this.sanitizeStyles(this.cleanZeroValueStyles(`text-align:${textAlign};${baseStyleCss}${borderCss}`));
     if (tdStyle && !tdStyle.endsWith(';')) tdStyle += ';';
 
-    return `<table cellpadding="0" cellspacing="0" border="0" width="100%"><tr><td align="${textAlign}" style="${tdStyle}">${innerHtml}</td></tr></table>`;
+    return `<table cellpadding="0" cellspacing="0" border="0" width="100%"><tr><td align="${textAlign}" ${tdStyle ? `style="${tdStyle}"` : ''}>${innerHtml}</td></tr></table>`;
   }
 
   private async renderBulletPoint(node: FrameNode, parentBgColor: RgbColor): Promise<string> {
@@ -500,7 +520,7 @@ class FigmaPluginParser {
     let textTdStyle = this.sanitizeStyles(this.styleObjectToCssString(textBaseStyle));
     if (textTdStyle && !textTdStyle.endsWith(';')) textTdStyle += ';';
 
-    return `<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation"><tr><td style="${bulletTdStyle}" valign="top">${bulletHtml}</td><td width="${itemSpacing}" style="width: ${itemSpacing}px;">&nbsp;</td><td style="${textTdStyle}" valign="top">${textHtml}</td></tr></table>`;
+    return `<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation"><tr><td ${bulletTdStyle ? `style="${bulletTdStyle}"` : ''} valign="top">${bulletHtml}</td><td width="${itemSpacing}" style="width: ${itemSpacing}px;">&nbsp;</td><td ${textTdStyle ? `style="${textTdStyle}"` : ''} valign="top">${textHtml}</td></tr></table>`;
   }
 
   private renderShape(node: SceneNode, parentBgColor: RgbColor): string {
@@ -532,14 +552,6 @@ class FigmaPluginParser {
         const base64String = figma.base64Encode(imageBytes);
         return `<img src="data:image/png;base64,${base64String}" width="${finalWidth}" alt="${altText}" style="display: block; border: 0; width: 100%; max-width: ${finalWidth}px; height: auto;" />`;
       }
-
-      // ZIP Mode (formerly 'download' in logic, now exposed as ZIP)
-      if (mode === 'zip') {
-        this.imageCounter++;
-        const imageName = `image-${this.imageCounter}.png`;
-        this.imageAssets.push({ name: imageName, data: imageBytes });
-        return `<img src="images/${imageName}" width="${finalWidth}" alt="${altText}" style="display: block; border: 0; width: 100%; max-width: ${finalWidth}px; height: auto;" />`;
-      }
     } catch (e) {
       return `<p style="color:red;">Error exporting image: ${altText}</p>`;
     }
@@ -548,8 +560,6 @@ class FigmaPluginParser {
 
   public async parse(nodes: readonly SceneNode[], imageExportMode: ImageExportMode): Promise<string> {
     if (nodes.length === 0) return "";
-    this.imageAssets = [];
-    this.imageCounter = 0;
     const rootBgColor = { r: 1, g: 1, b: 1 };
 
     if (nodes.length === 1) {
@@ -596,7 +606,7 @@ function isBulletPoint(node: SceneNode): node is FrameNode {
 
 figma.showUI(__html__, { width: 400, height: 480 });
 
-async function processSelection(imageExportMode: ImageExportMode, mobileFluid: boolean) {
+async function processSelection(imageExportMode: ImageExportMode, mobileFluid: boolean, useLiteralWidth: boolean) {
   const selectedNodes = figma.currentPage.selection;
   if (selectedNodes.length === 0) {
     figma.notify("Please select at least one element.");
@@ -606,20 +616,20 @@ async function processSelection(imageExportMode: ImageExportMode, mobileFluid: b
 
   await collectAndLoadAllFonts(selectedNodes);
 
-  const parser = new FigmaPluginParser(mobileFluid);
+  const parser = new FigmaPluginParser(mobileFluid, useLiteralWidth);
   const html = await parser.parse(selectedNodes, imageExportMode);
 
   figma.ui.postMessage({
     type: 'generated-html',
     payload: {
       html,
-      assets: parser.getCollectedImageAssets(),
+      assets: [],
     }
   });
 };
 
 figma.ui.onmessage = async (msg: { type: string, payload: any }) => {
   if (msg.type === 'generate-html-for-selection') {
-    await processSelection(msg.payload.imageExportMode, msg.payload.mobileFluid);
+    await processSelection(msg.payload.imageExportMode, msg.payload.mobileFluid, msg.payload.useLiteralWidth);
   }
 };
