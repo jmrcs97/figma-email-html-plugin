@@ -120,15 +120,19 @@ class FigmaPluginParser {
     if (style.fontName?.family) {
       styles['font-family'] = this.getFontStack(style.fontName.family);
       const f_style = style.fontName.style.toLowerCase();
-      styles['font-weight'] = f_style.includes('bold') ? '700' : '400';
-      styles['font-style'] = f_style.includes('italic') ? 'italic' : 'normal';
+
+      // apenas negrito ou italico, normal é padrao
+      if (f_style.includes('bold')) styles['font-weight'] = 'bold';
+      if (f_style.includes('italic')) styles['font-style'] = 'italic';
     }
     if (style.fontSize) styles['font-size'] = `${Math.round(style.fontSize)}px`;
     if (style.lineHeight?.unit !== 'AUTO') {
       if (style.lineHeight.unit === 'PIXELS') styles['line-height'] = `${Math.round(style.lineHeight.value)}px`;
       else if (style.lineHeight.unit === 'PERCENT') styles['line-height'] = `${Math.round(style.lineHeight.value)}%`;
     }
-    styles['text-decoration'] = style.textDecoration === "UNDERLINE" ? 'underline' : 'none';
+
+    // apenas underline, none é padrao
+    if (style.textDecoration === "UNDERLINE") styles['text-decoration'] = 'underline';
     return styles;
   }
 
@@ -210,7 +214,7 @@ class FigmaPluginParser {
         let tag = 'span';
         const diffKeys = Object.keys(styleDiff);
         // otimização pra umas tags mais simples
-        if (diffKeys.length === 1 && diffKeys[0] === 'font-weight' && styleDiff['font-weight'] === '700') {
+        if (diffKeys.length === 1 && diffKeys[0] === 'font-weight' && styleDiff['font-weight'] === 'bold') {
           tag = 'strong';
         } else if (diffKeys.length === 1 && diffKeys[0] === 'font-style' && styleDiff['font-style'] === 'italic') {
           tag = 'i';
@@ -386,7 +390,20 @@ class FigmaPluginParser {
       } else {
         const childHtml = await this.renderNode(child, availableWidth, parentBgColor, imageExportMode);
         if (childHtml) {
-          rows.push(`<tr>${leftSpacer}<td>${childHtml}</td>${rightSpacer}</tr>`);
+          // se for imagem, aplica a largura no TD pra garantir compatibilidade
+          let tdAttributes = "";
+          if (this.isImageLikeNode(child)) {
+            const imgWidth = Math.min(Math.round(child.width), availableWidth);
+            tdAttributes = `width="${imgWidth}" style="width: ${imgWidth}px;"`;
+            // se imagem for centralizada no pai, alinhamos o TD
+            if ('layoutMode' in parentNode && (parentNode.counterAxisAlignItems === 'CENTER' || (parentNode as any).primaryAxisAlignItems === 'CENTER')) { // primaryAxisAlignItems check is risky if vertical but usually counterAxis for stack
+              // For Vertical Stack, Counter Axis = Horizontal Alignment
+              if ('layoutMode' in parentNode && parentNode.layoutMode === 'VERTICAL' && parentNode.counterAxisAlignItems === 'CENTER') {
+                tdAttributes += ` align="center"`;
+              }
+            }
+          }
+          rows.push(`<tr>${leftSpacer}<td ${tdAttributes}>${childHtml}</td>${rightSpacer}</tr>`);
         }
         lastBottomY = child.y + child.height;
       }
@@ -470,7 +487,14 @@ class FigmaPluginParser {
       let valign = "top";
       if (frameNode.counterAxisAlignItems === 'CENTER') valign = 'middle';
       if (frameNode.counterAxisAlignItems === 'MAX') valign = 'bottom';
-      cells.push(`<td valign="${valign}">${childHtml}</td>`);
+
+      let tdAttrs = `valign="${valign}"`;
+      if (this.isImageLikeNode(child)) {
+        const imgWidth = Math.round(child.width);
+        tdAttrs += ` width="${imgWidth}" style="width: ${imgWidth}px;"`;
+      }
+
+      cells.push(`<td ${tdAttrs}>${childHtml}</td>`);
 
       if (index < horizontalChildren.length - 1 && itemSpacing > 0) {
         cells.push(`<td width="${itemSpacing}" style="width: ${itemSpacing}px;">&nbsp;</td>`);
@@ -537,7 +561,7 @@ class FigmaPluginParser {
 
     if (mode === 'placeholder') {
       const url = `https://placehold.co/${finalWidth}x${Math.round(height)}/EFEFEF/7F7F7F?text=${finalWidth}x${Math.round(height)}`;
-      return `<img src="${url}" width="${finalWidth}" alt="${altText}" style="display: block; border: 0; width: 100%; max-width: ${finalWidth}px; height: auto;" />`;
+      return `<img src="${url}" width="${finalWidth}" alt="${altText}" style="display: block; border: 0; max-width: ${finalWidth}px; height: auto;" />`;
     }
 
     try {
@@ -546,7 +570,7 @@ class FigmaPluginParser {
 
       if (mode === 'base64') {
         const base64String = figma.base64Encode(imageBytes);
-        return `<img src="data:image/png;base64,${base64String}" width="${finalWidth}" alt="${altText}" style="display: block; border: 0; width: 100%; max-width: ${finalWidth}px; height: auto;" />`;
+        return `<img src="data:image/png;base64,${base64String}" width="${finalWidth}" alt="${altText}" style="display: block; border: 0; max-width: ${finalWidth}px; height: auto;" />`;
       }
     } catch (e) {
       return `<p style="color:red;">Error exporting image: ${altText}</p>`;
