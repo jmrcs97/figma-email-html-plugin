@@ -97,7 +97,7 @@ class FigmaPluginParser {
     }).join(";");
   }
 
-  // --- FONT FALLBACK HELPER ---
+  // --- auxiliares de fallback de fonte ---
   private getFontStack(family: string): string {
     const sansSerif = "Arial, Helvetica, sans-serif";
     const serif = "Georgia, 'Times New Roman', serif";
@@ -108,7 +108,6 @@ class FigmaPluginParser {
     if (lower.includes('times') || lower.includes('georgia') || lower.includes('serif')) return `'${family}', ${serif}`;
     if (lower.includes('mono') || lower.includes('courier')) return `'${family}', ${monospace}`;
 
-    // Default fallback
     return `'${family}', ${sansSerif}`;
   }
 
@@ -119,7 +118,7 @@ class FigmaPluginParser {
       if (colorHex) styles['color'] = colorHex;
     }
     if (style.fontName?.family) {
-      styles['font-family'] = this.getFontStack(style.fontName.family); // Use Fallback
+      styles['font-family'] = this.getFontStack(style.fontName.family);
       const f_style = style.fontName.style.toLowerCase();
       styles['font-weight'] = f_style.includes('bold') ? '700' : '400';
       styles['font-style'] = f_style.includes('italic') ? 'italic' : 'normal';
@@ -160,19 +159,18 @@ class FigmaPluginParser {
       return { baseStyle: {}, innerHtml: "" };
     }
 
-    // 1. Determine the "Base Style" for the parent TD.
-    // Instead of naive "first segment wins", we pick the most common style (by character count)
-    // to minimize the number of spans generated.
+    // aqui a gente descobre qual o estilo base pro TD pai.
+    // em vez de pegar só o primeiro, pegamos o estilo que mais aparece (por quantidade de chars)
+    // isso evita criar varios spans desnecessarios
     const styleCounts = new Map<string, { count: number, style: { [key: string]: string } }>();
     let maxCount = -1;
     let mostCommonStyle: { [key: string]: string } = {};
 
     const processedSegments = segments.map(segment => {
-      // Safety check for mixed props if any (though getStyledTextSegments splits them)
       if (typeof segment.fontName === 'symbol') return null;
 
       const style = this.getSegmentStyleObject(segment, parentBgColor);
-      const styleKey = JSON.stringify(style); // Simple serialization for grouping
+      const styleKey = JSON.stringify(style);
 
       const current = styleCounts.get(styleKey) || { count: 0, style };
       current.count += segment.characters.length;
@@ -185,7 +183,7 @@ class FigmaPluginParser {
       return { segment, style };
     });
 
-    // Fallback: Use the first valid style if calculation failed (unlikely)
+    // fallback: usa o primeiro se der ruim no calculo
     if (Object.keys(mostCommonStyle).length === 0) {
       const firstValid = processedSegments.find(s => s !== null);
       if (firstValid) mostCommonStyle = firstValid.style;
@@ -198,7 +196,7 @@ class FigmaPluginParser {
       if (!item) continue;
       const { segment, style: segmentStyle } = item;
 
-      // 2. Diff against the Base Style
+      // compara com o estilo base
       const styleDiff = this.diffStyleObjects(baseStyle, segmentStyle);
 
       const sanitizedChars = segment.characters.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br />");
@@ -211,7 +209,7 @@ class FigmaPluginParser {
       } else {
         let tag = 'span';
         const diffKeys = Object.keys(styleDiff);
-        // Optimization for simple tags
+        // otimização pra umas tags mais simples
         if (diffKeys.length === 1 && diffKeys[0] === 'font-weight' && styleDiff['font-weight'] === '700') {
           tag = 'strong';
         } else if (diffKeys.length === 1 && diffKeys[0] === 'font-style' && styleDiff['font-style'] === 'italic') {
@@ -225,8 +223,6 @@ class FigmaPluginParser {
 
     return { baseStyle, innerHtml: htmlOutput };
   }
-
-  // --- FIM DOS MÉTODOS AUXILIARES ---
 
   private getBorderStyles(node: SceneNode): string | null {
     if (!("strokes" in node) || !Array.isArray(node.strokes) || node.strokes.length === 0 || !("strokeWeight" in node) || typeof node.strokeWeight !== 'number' || node.strokeWeight === 0) {
@@ -290,7 +286,6 @@ class FigmaPluginParser {
 
   private async renderNode(node: SceneNode, parentWidth: number, parentBgColor: RgbColor, imageExportMode: ImageExportMode): Promise<string> {
     if (!node.visible) return "";
-    // Clean Empty Nodes
     if ("opacity" in node && node.opacity === 0) return "";
 
     if (this.isImageLikeNode(node)) return this.renderImage(node, parentWidth, imageExportMode);
@@ -325,7 +320,7 @@ class FigmaPluginParser {
     const paddingTop = ('paddingTop' in parentNode ? parentNode.paddingTop : 0) as number;
     const availableWidth = parentWidth - paddingLeft - paddingRight;
 
-    // --- Optimization: Unwrap Single Child ---
+    // --- otimização: desenrola filho único ---
     if (children.length === 1) {
       const child = children[0];
       const verticalGap = Math.round(child.y - paddingTop);
@@ -366,7 +361,7 @@ class FigmaPluginParser {
           if (index > 0 && gapWithinGroup > 2) {
             textRows.push(`<tr><td height="${gapWithinGroup}" style="height:${gapWithinGroup}px; font-size:${gapWithinGroup}px; line-height:${gapWithinGroup}px;">&nbsp;</td></tr>`);
           }
-          // --- LÓGICA DE TEXTO ATUALIZADA ---
+          // --- lógica de texto atualizada ---
           const { baseStyle, innerHtml } = this.processTextNode(textNode, parentBgColor);
           if (innerHtml) {
             const textAlign = (textNode.textAlignHorizontal || 'LEFT').toLowerCase();
@@ -414,32 +409,28 @@ class FigmaPluginParser {
     const paddingTop = 'paddingTop' in node ? Math.round((node as any).paddingTop as number) : 0;
     const paddingBottom = 'paddingBottom' in node ? Math.round((node as any).paddingBottom as number) : 0;
 
-    // Setup Container Styles
     let tableStyles = this.sanitizeStyles(this.cleanZeroValueStyles([bgColorHex ? `background-color:${bgColorHex}` : null, this.getBorderStyles(node)].filter(Boolean).join(";")));
     if (tableStyles) tableStyles += ';';
 
     const width = isRoot ? parentWidth : Math.min(node.width, parentWidth);
     let tableAttributes: string;
 
-    // Logic for Width: Literal vs Default (100%)
+    // lógica de largura: literal vs padrão (100%)
     if (this.useLiteralWidth) {
       tableAttributes = `width="${width}" ${tableStyles ? `style="${tableStyles}"` : ''}`;
     } else {
-      // Default to 100% if not using literal width
       tableAttributes = `width="100%" ${tableStyles ? `style="width: 100%; ${tableStyles}"` : (tableStyles ? `style="${tableStyles}"` : '')}`;
     }
 
-    if (bgColorHex) tableAttributes += ` bgcolor="${bgColorHex}"`; // legacy attr backup
+    if (bgColorHex) tableAttributes += ` bgcolor="${bgColorHex}"`;
 
-    // --- Optimization: Merge Wrapper and Content for Vertical Layout ---
-    if (layoutMode !== "HORIZONTAL") { // Stacking
-      // Check strict single child (unwrapping logic inside getStackedRows returns <tr><td>...</td></tr>, 
-      // but if we want to return raw child without ANY table wrapper if container is invisible, we can check here)
+    // --- otimização: junta wrapper e conteudo em layout vertical ---
+    if (layoutMode !== "HORIZONTAL") { // empilhado
       if (children.length === 1 && !bgColorHex && !this.getBorderStyles(node)) {
         const paddingLeft = ('paddingLeft' in node ? node.paddingLeft : 0) as number;
         const paddingRight = ('paddingRight' in node ? node.paddingRight : 0) as number;
         const childGap = children[0].y - paddingTop;
-        // If simple wrapper, check if we can skip entire table structure
+
         if (paddingLeft === 0 && paddingRight === 0 && childGap <= 2 && paddingTop === 0 && paddingBottom === 0 && !isRoot) {
           return this.renderNode(children[0], parentWidth, parentBgColor, imageExportMode);
         }
@@ -452,21 +443,20 @@ class FigmaPluginParser {
       const paddingRight = ('paddingRight' in node ? node.paddingRight : 0) as number;
       const colSpan = 1 + (paddingLeft > 0 ? 1 : 0) + (paddingRight > 0 ? 1 : 0);
 
-      // Add Padding Rows to the main set
+      // adiciona linhas de padding no conjunto principal
       const paddingTopHtml = paddingTop > 0 ? `<tr><td height="${paddingTop}" style="font-size:${paddingTop}px; line-height:${paddingTop}px;" colspan="${colSpan}">&nbsp;</td></tr>` : "";
       const paddingBottomHtml = paddingBottom > 0 ? `<tr><td height="${paddingBottom}" style="font-size:${paddingBottom}px; line-height:${paddingBottom}px;" colspan="${colSpan}">&nbsp;</td></tr>` : "";
 
       return `<table ${tableAttributes} cellpadding="0" cellspacing="0" border="0" role="presentation">${paddingTopHtml}${rows.join('')}${paddingBottomHtml}</table>`;
     }
 
-    // --- Horizontal Layout ---
+    // --- layout horizontal ---
     const frameNode = node as FrameNode;
     const horizontalChildren = (frameNode.children || []).filter((c) => c.visible !== false);
     const itemSpacing = typeof frameNode.itemSpacing === 'number' ? Math.round(frameNode.itemSpacing) : 0;
     const paddingLeft = ('paddingLeft' in frameNode ? frameNode.paddingLeft : 0) as number;
     const paddingRight = ('paddingRight' in frameNode ? frameNode.paddingRight : 0) as number;
 
-    // Calculate colspan for padding rows: children + spacers + left/right padding cells
     const spacerCount = horizontalChildren.length > 1 ? horizontalChildren.length - 1 : 0;
     const colSpan = horizontalChildren.length + spacerCount + (paddingLeft > 0 ? 1 : 0) + (paddingRight > 0 ? 1 : 0);
 
