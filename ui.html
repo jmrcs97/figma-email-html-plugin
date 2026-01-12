@@ -1,6 +1,3 @@
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
-
 <style>
   :root {
     /* Pastel Palette */
@@ -265,8 +262,6 @@
   <textarea id="output" readonly placeholder="SELECT ELEMENTS & CLICK CONVERT..."></textarea>
 
   <button id="copyBtn" style="display: none;">COPY CODE</button>
-  <button id="downloadBtn" style="display: none; background-color: var(--accent-green); margin-top: auto;">DOWNLOAD
-    ZIP</button>
 </div>
 
 <!-- Settings Modal -->
@@ -292,12 +287,6 @@
           <span>BASE64</span>
         </label>
         <span class="helper-text">Embeds images in HTML (Heavy file size).</span>
-
-        <label class="radio-option">
-          <input type="radio" name="imageExport" value="zip">
-          <span>DOWNLOAD ZIP</span>
-        </label>
-        <span class="helper-text">Downloads .zip with HTML + Images (Best for production).</span>
       </div>
     </div>
 
@@ -318,13 +307,9 @@
   const generateBtn = document.getElementById('generate');
   const outputTextarea = document.getElementById('output');
   const copyBtn = document.getElementById('copyBtn');
-  const downloadBtn = document.getElementById('downloadBtn');
   const settingsBtn = document.getElementById('settingsBtn');
   const settingsModal = document.getElementById('settingsModal');
   const closeSettings = document.getElementById('closeSettings');
-
-  // State
-  let currentZipData = null;
 
   // Modal Logic
   settingsBtn.onclick = () => { settingsModal.style.display = 'flex'; };
@@ -343,7 +328,6 @@
     generateBtn.disabled = true;
     outputTextarea.value = '';
     copyBtn.style.display = 'none';
-    downloadBtn.style.display = 'none';
 
     // Get Settings
     const imageExportMode = document.querySelector('input[name="imageExport"]:checked').value;
@@ -353,7 +337,7 @@
       pluginMessage: {
         type: 'generate-html-for-selection',
         payload: {
-          imageExportMode, // 'placeholder' | 'base64' | 'zip'
+          imageExportMode, // 'placeholder' | 'base64'
           mobileFluid
         }
       }
@@ -408,68 +392,16 @@
     }
   };
 
-  downloadBtn.onclick = () => {
-    if (!currentZipData) {
-      console.error("No ZIP data available");
-      return;
-    }
-
-    if (typeof JSZip === 'undefined' || typeof saveAs === 'undefined') {
-      alert("Error: ZIP libraries failed to load from CDN. Please check your internet connection.");
-      return;
-    }
-
-    const downloadOriginalText = downloadBtn.textContent;
-    downloadBtn.textContent = "ZIPPING...";
-    downloadBtn.disabled = true;
-
-    try {
-      const zip = new JSZip();
-      zip.file("index.html", currentZipData.html);
-
-      const imgFolder = zip.folder("images");
-      currentZipData.assets.forEach(asset => {
-        imgFolder.file(asset.name, asset.data);
-      });
-
-      zip.generateAsync({ type: "blob" }).then(function (content) {
-        saveAs(content, "email-export.zip");
-        downloadBtn.textContent = downloadOriginalText;
-        downloadBtn.disabled = false;
-      }).catch(err => {
-        console.error(err);
-        alert("Error generating ZIP file: " + err.message);
-        downloadBtn.textContent = downloadOriginalText;
-        downloadBtn.disabled = false;
-      });
-    } catch (err) {
-      console.error(err);
-      alert("Unexpected error: " + err.message);
-      downloadBtn.textContent = downloadOriginalText;
-      downloadBtn.disabled = false;
-    }
-  };
-
   window.onmessage = (event) => {
     const { type, payload } = event.data.pluginMessage;
 
     if (type === 'generated-html') {
-      const mode = document.querySelector('input[name="imageExport"]:checked').value;
-
       outputTextarea.value = payload.html;
       resetGenerateButton();
 
       // Always show Copy button if there is content
       if (payload.html) {
         copyBtn.style.display = 'block';
-      }
-
-      // Show Download button ONLY if in ZIP mode
-      if (mode === 'zip') {
-        currentZipData = payload;
-        downloadBtn.style.display = 'block';
-      } else {
-        downloadBtn.style.display = 'none';
       }
     }
   };
