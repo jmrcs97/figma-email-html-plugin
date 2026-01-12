@@ -169,19 +169,51 @@ class FigmaPluginParser {
     if (segments.length === 0) {
       return { baseStyle: {}, innerHtml: "" };
     }
-    const firstValidSegment = segments.find(s => typeof s.fontName !== 'symbol');
-    if (!firstValidSegment) {
-      return { baseStyle: {}, innerHtml: "" };
-    }
-    const baseStyle = this.getSegmentStyleObject(firstValidSegment, parentBgColor);
-    let htmlOutput = "";
-    for (const segment of segments) {
-      if (typeof segment.fontName === 'symbol') continue;
 
-      const segmentStyle = this.getSegmentStyleObject(segment, parentBgColor);
+    // 1. Determine the "Base Style" for the parent TD.
+    // Instead of naive "first segment wins", we pick the most common style (by character count)
+    // to minimize the number of spans generated.
+    const styleCounts = new Map<string, { count: number, style: { [key: string]: string } }>();
+    let maxCount = -1;
+    let mostCommonStyle: { [key: string]: string } = {};
+
+    const processedSegments = segments.map(segment => {
+      // Safety check for mixed props if any (though getStyledTextSegments splits them)
+      if (typeof segment.fontName === 'symbol') return null;
+
+      const style = this.getSegmentStyleObject(segment, parentBgColor);
+      const styleKey = JSON.stringify(style); // Simple serialization for grouping
+
+      const current = styleCounts.get(styleKey) || { count: 0, style };
+      current.count += segment.characters.length;
+      styleCounts.set(styleKey, current);
+
+      if (current.count > maxCount) {
+        maxCount = current.count;
+        mostCommonStyle = style;
+      }
+      return { segment, style };
+    });
+
+    // Fallback: Use the first valid style if calculation failed (unlikely)
+    if (Object.keys(mostCommonStyle).length === 0) {
+      const firstValid = processedSegments.find(s => s !== null);
+      if (firstValid) mostCommonStyle = firstValid.style;
+    }
+
+    const baseStyle = mostCommonStyle;
+    let htmlOutput = "";
+
+    for (const item of processedSegments) {
+      if (!item) continue;
+      const { segment, style: segmentStyle } = item;
+
+      // 2. Diff against the Base Style
       const styleDiff = this.diffStyleObjects(baseStyle, segmentStyle);
+
       const sanitizedChars = segment.characters.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br />");
       const finalContent = bulletCharacterMap[sanitizedChars.trim()] || sanitizedChars;
+
       if (!finalContent) continue;
 
       if (Object.keys(styleDiff).length === 0) {
@@ -189,15 +221,18 @@ class FigmaPluginParser {
       } else {
         let tag = 'span';
         const diffKeys = Object.keys(styleDiff);
+        // Optimization for simple tags
         if (diffKeys.length === 1 && diffKeys[0] === 'font-weight' && styleDiff['font-weight'] === '700') {
           tag = 'strong';
         } else if (diffKeys.length === 1 && diffKeys[0] === 'font-style' && styleDiff['font-style'] === 'italic') {
           tag = 'i';
         }
+
         const diffCss = this.styleObjectToCssString(styleDiff);
         htmlOutput += `<${tag} ${diffCss ? `style="${diffCss}"` : ''}>${finalContent}</${tag}>`;
       }
     }
+
     return { baseStyle, innerHtml: htmlOutput };
   }
 
@@ -293,11 +328,28 @@ class FigmaPluginParser {
       children.sort((a, b) => a.y - b.y);
     }
 
-    const rows: string[] = [];
-    let lastBottomY = ('paddingTop' in parentNode ? parentNode.paddingTop : 0) as number;
+    if (children.length === 0) return "";
+
     const paddingLeft = ('paddingLeft' in parentNode ? parentNode.paddingLeft : 0) as number;
     const paddingRight = ('paddingRight' in parentNode ? parentNode.paddingRight : 0) as number;
+    const paddingTop = ('paddingTop' in parentNode ? parentNode.paddingTop : 0) as number;
     const availableWidth = parentWidth - paddingLeft - paddingRight;
+
+    // --- Optimization: Unwrap Single Child ---
+    // If there is only 1 child, and it fits perfectly (no extra gap from top padding, no side padding),
+    // we can return the child directly and let the parent container handle it.
+    if (children.length === 1) {
+      const child = children[0];
+      const verticalGap = Math.round(child.y - paddingTop);
+
+      // If no side padding in this container AND no weird vertical gap
+      if (paddingLeft === 0 && paddingRight === 0 && verticalGap <= 2) {
+        return this.renderNode(child, availableWidth, parentBgColor, imageExportMode);
+      }
+    }
+
+    const rows: string[] = [];
+    let lastBottomY = paddingTop;
 
     for (let i = 0; i < children.length; i++) {
       const child = children[i];
