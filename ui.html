@@ -1,12 +1,15 @@
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
 <style>
   :root {
     /* Pastel Palette */
-    --bg-main: #FFFDF5; /* Creamy off-white */
+    --bg-main: #FFFDF5;
     --accent-pink: #FFB7B2;
     --accent-green: #B5EAD7;
     --accent-blue: #C7CEEA;
     --accent-yellow: #FFF4BD;
-    
+
     /* Brutalist Tokens */
     --border-color: #000000;
     --border-width: 2px;
@@ -15,7 +18,7 @@
   }
 
   body {
-    font-family: 'Courier New', Courier, monospace; /* Monospaced for brutalist feel */
+    font-family: 'Courier New', Courier, monospace;
     margin: 0;
     padding: 0;
     background-color: var(--bg-main);
@@ -29,13 +32,27 @@
     height: 100vh;
     box-sizing: border-box;
     gap: 16px;
+    position: relative;
   }
 
   /* Typography */
-  h1, h2, h3, legend, button, label {
+  h1,
+  h2,
+  h3,
+  legend,
+  button,
+  label,
+  .settings-title {
     text-transform: uppercase;
     font-weight: 700;
     letter-spacing: 0.5px;
+  }
+
+  /* Action Row */
+  .action-row {
+    display: flex;
+    gap: 12px;
+    align-items: stretch;
   }
 
   /* Buttons */
@@ -68,83 +85,152 @@
   #generate {
     background-color: var(--accent-green);
     font-size: 16px;
+    flex-grow: 1;
+    /* Make convert button take remaining space */
   }
 
   #generate:not(:disabled):hover {
-    background-color: #a3dcc9; /* Slightly darker pastel green */
+    background-color: #a3dcc9;
   }
 
   #copyBtn {
     background-color: var(--accent-pink);
-    margin-top: 0; /* Handled by gat in container */
+    margin-top: auto;
   }
 
   #copyBtn:not(:disabled):hover {
-    background-color: #ffa09a; 
+    background-color: #ffa09a;
   }
 
-  /* Form Elements */
-  .image-options {
-    margin: 0;
-    padding: 12px;
-    border: var(--border-width) solid var(--border-color);
-    border-radius: 0;
-    background-color: #fff;
-    box-shadow: var(--box-shadow);
-  }
-
-  .image-options legend {
-    font-size: 12px;
-    padding: 4px 8px;
-    background: var(--accent-yellow);
-    border: var(--border-width) solid var(--border-color);
-    margin-bottom: 8px; /* Visual spacing */
-  }
-
-  .image-options div {
-    display: flex;
-    justify-content: flex-start;
-    gap: 20px;
-    padding-top: 4px;
-  }
-
-  .image-options label {
+  #settingsBtn {
+    padding: 0 16px;
+    /* Adjust padding for better square-ish look next to big button */
+    background-color: var(--accent-yellow);
+    font-size: 20px;
     display: flex;
     align-items: center;
+    justify-content: center;
+  }
+
+  /* Settings Modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 10;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .modal-content {
+    background: var(--bg-main);
+    border: var(--border-width) solid var(--border-color);
+    box-shadow: var(--box-shadow);
+    width: 320px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid #000;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+  }
+
+  .close-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    font-size: 24px;
+    padding: 0;
+    color: #000;
+  }
+
+  .close-btn:active {
+    transform: none;
+    color: #555;
+  }
+
+  /* Settings Options */
+  .setting-group {
+    display: flex;
+    flex-direction: column;
     gap: 8px;
+  }
+
+  .setting-label {
+    font-size: 12px;
+    background: var(--accent-yellow);
+    display: inline-block;
+    padding: 4px;
+    border: 2px solid #000;
+    width: fit-content;
+  }
+
+  .radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .radio-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-size: 14px;
     cursor: pointer;
   }
 
-  /* Custom Radio Button attempt for Brutalism */
-  input[type="radio"] {
+  .helper-text {
+    font-size: 10px;
+    color: #555;
+    margin-left: 28px;
+    display: block;
+    line-height: 1.2;
+  }
+
+  /* Custom Checkbox/Radio */
+  input[type="radio"],
+  input[type="checkbox"] {
     appearance: none;
     -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border: 2px solid #000;
     background-color: #fff;
-    border-radius: 0; /* Square radios */
+    border-radius: 0;
     display: grid;
     place-content: center;
     margin: 0;
+    flex-shrink: 0;
   }
 
-  input[type="radio"]::before {
+  input[type="radio"]::before,
+  input[type="checkbox"]::before {
     content: "";
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     transform: scale(0);
     transition: 120ms transform ease-in-out;
-    box-shadow: inset 1em 1em var(--text-primary);
     background-color: #000;
   }
 
-  input[type="radio"]:checked {
+  input[type="radio"]:checked,
+  input[type="checkbox"]:checked {
     background-color: var(--accent-yellow);
   }
 
-  input[type="radio"]:checked::before {
+  input[type="radio"]:checked::before,
+  input[type="checkbox"]:checked::before {
     transform: scale(1);
   }
 
@@ -162,6 +248,7 @@
     color: var(--text-primary);
     box-shadow: var(--box-shadow);
     outline: none;
+    margin-bottom: 20px;
   }
 
   textarea:focus {
@@ -170,29 +257,81 @@
 </style>
 
 <div class="container">
-  <fieldset class="image-options">
-    <legend>Image Export</legend>
-    <div>
-      <label>
-        <input type="radio" name="imageExport" value="placeholder" checked> PLACEHOLDER
-      </label>
-      <label>
-        <input type="radio" name="imageExport" value="base64"> BASE64
-      </label>
-    </div>
-  </fieldset>
-
-  <button id="generate">CONVERT SELECTION</button>
+  <div class="action-row">
+    <button id="generate">CONVERT SELECTION</button>
+    <button id="settingsBtn">⚙</button>
+  </div>
 
   <textarea id="output" readonly placeholder="SELECT ELEMENTS & CLICK CONVERT..."></textarea>
-  
+
   <button id="copyBtn" style="display: none;">COPY CODE</button>
+  <button id="downloadBtn" style="display: none; background-color: var(--accent-green); margin-top: auto;">DOWNLOAD
+    ZIP</button>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <span class="settings-title">SETTINGS</span>
+      <button class="close-btn" id="closeSettings">×</button>
+    </div>
+
+    <!-- Image Options -->
+    <div class="setting-group">
+      <span class="setting-label">IMAGE EXPORT</span>
+      <div class="radio-group">
+        <label class="radio-option">
+          <input type="radio" name="imageExport" value="placeholder" checked>
+          <span>PLACEHOLDER</span>
+        </label>
+        <span class="helper-text">Generates grey boxes (Best for quick layout checks).</span>
+
+        <label class="radio-option">
+          <input type="radio" name="imageExport" value="base64">
+          <span>BASE64</span>
+        </label>
+        <span class="helper-text">Embeds images in HTML (Heavy file size).</span>
+
+        <label class="radio-option">
+          <input type="radio" name="imageExport" value="zip">
+          <span>DOWNLOAD ZIP</span>
+        </label>
+        <span class="helper-text">Downloads .zip with HTML + Images (Best for production).</span>
+      </div>
+    </div>
+
+    <!-- Mobile Options -->
+    <div class="setting-group">
+      <span class="setting-label">RESPONSIVENESS</span>
+      <label class="radio-option">
+        <input type="checkbox" id="mobileFluid">
+        <span>MOBILE FLUID</span>
+      </label>
+      <span class="helper-text">Makes main containers 100% width with a max-width constrain (Hybrid Fluid).</span>
+    </div>
+
+  </div>
 </div>
 
 <script>
   const generateBtn = document.getElementById('generate');
   const outputTextarea = document.getElementById('output');
   const copyBtn = document.getElementById('copyBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const settingsBtn = document.getElementById('settingsBtn');
+  const settingsModal = document.getElementById('settingsModal');
+  const closeSettings = document.getElementById('closeSettings');
+
+  // State
+  let currentZipData = null;
+
+  // Modal Logic
+  settingsBtn.onclick = () => { settingsModal.style.display = 'flex'; };
+  closeSettings.onclick = () => { settingsModal.style.display = 'none'; };
+  settingsModal.onclick = (e) => {
+    if (e.target === settingsModal) settingsModal.style.display = 'none';
+  };
 
   const resetGenerateButton = () => {
     generateBtn.textContent = 'CONVERT SELECTION';
@@ -204,31 +343,35 @@
     generateBtn.disabled = true;
     outputTextarea.value = '';
     copyBtn.style.display = 'none';
-    
+    downloadBtn.style.display = 'none';
+
+    // Get Settings
     const imageExportMode = document.querySelector('input[name="imageExport"]:checked').value;
-    
-    parent.postMessage({ 
-      pluginMessage: { 
+    const mobileFluid = document.getElementById('mobileFluid').checked;
+
+    parent.postMessage({
+      pluginMessage: {
         type: 'generate-html-for-selection',
-        payload: { imageExportMode }
-      } 
+        payload: {
+          imageExportMode, // 'placeholder' | 'base64' | 'zip'
+          mobileFluid
+        }
+      }
     }, '*');
   };
 
   copyBtn.onclick = () => {
-    // Select the text field
     outputTextarea.select();
-    outputTextarea.setSelectionRange(0, 99999); // For mobile devices
+    outputTextarea.setSelectionRange(0, 99999);
 
     const originalText = copyBtn.textContent;
-    const originalBg = copyBtn.style.backgroundColor;
 
     const showSuccess = () => {
       copyBtn.textContent = 'COPIED!';
       copyBtn.style.backgroundColor = '#000';
       copyBtn.style.color = '#fff';
-      
-      setTimeout(() => { 
+
+      setTimeout(() => {
         copyBtn.textContent = originalText;
         copyBtn.style.backgroundColor = '';
         copyBtn.style.color = '';
@@ -241,29 +384,69 @@
       setTimeout(() => { copyBtn.textContent = originalText; }, 2000);
     };
 
-    // Try Clipboard API first
+    // Try Clipboard API first, fallback to execCommand
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(outputTextarea.value)
         .then(showSuccess)
         .catch(() => {
-            // Fallback to execCommand
-            try {
-                const successful = document.execCommand('copy');
-                if (successful) showSuccess();
-                else showFailure();
-            } catch (err) {
-                showFailure(err);
-            }
+          try {
+            const successful = document.execCommand('copy');
+            if (successful) showSuccess();
+            else showFailure();
+          } catch (err) {
+            showFailure(err);
+          }
         });
     } else {
-      // Fallback if API not present
       try {
-          const successful = document.execCommand('copy');
-          if (successful) showSuccess();
-          else showFailure();
+        const successful = document.execCommand('copy');
+        if (successful) showSuccess();
+        else showFailure();
       } catch (err) {
-          showFailure(err);
+        showFailure(err);
       }
+    }
+  };
+
+  downloadBtn.onclick = () => {
+    if (!currentZipData) {
+      console.error("No ZIP data available");
+      return;
+    }
+
+    if (typeof JSZip === 'undefined' || typeof saveAs === 'undefined') {
+      alert("Error: ZIP libraries failed to load from CDN. Please check your internet connection.");
+      return;
+    }
+
+    const downloadOriginalText = downloadBtn.textContent;
+    downloadBtn.textContent = "ZIPPING...";
+    downloadBtn.disabled = true;
+
+    try {
+      const zip = new JSZip();
+      zip.file("index.html", currentZipData.html);
+
+      const imgFolder = zip.folder("images");
+      currentZipData.assets.forEach(asset => {
+        imgFolder.file(asset.name, asset.data);
+      });
+
+      zip.generateAsync({ type: "blob" }).then(function (content) {
+        saveAs(content, "email-export.zip");
+        downloadBtn.textContent = downloadOriginalText;
+        downloadBtn.disabled = false;
+      }).catch(err => {
+        console.error(err);
+        alert("Error generating ZIP file: " + err.message);
+        downloadBtn.textContent = downloadOriginalText;
+        downloadBtn.disabled = false;
+      });
+    } catch (err) {
+      console.error(err);
+      alert("Unexpected error: " + err.message);
+      downloadBtn.textContent = downloadOriginalText;
+      downloadBtn.disabled = false;
     }
   };
 
@@ -271,11 +454,22 @@
     const { type, payload } = event.data.pluginMessage;
 
     if (type === 'generated-html') {
+      const mode = document.querySelector('input[name="imageExport"]:checked').value;
+
       outputTextarea.value = payload.html;
       resetGenerateButton();
 
+      // Always show Copy button if there is content
       if (payload.html) {
-          copyBtn.style.display = 'block';
+        copyBtn.style.display = 'block';
+      }
+
+      // Show Download button ONLY if in ZIP mode
+      if (mode === 'zip') {
+        currentZipData = payload;
+        downloadBtn.style.display = 'block';
+      } else {
+        downloadBtn.style.display = 'none';
       }
     }
   };
