@@ -293,11 +293,7 @@
     <!-- Mobile Options -->
     <div class="setting-group">
       <span class="setting-label">RESPONSIVENESS</span>
-      <label class="radio-option">
-        <input type="checkbox" id="mobileFluid">
-        <span>MOBILE FLUID</span>
-      </label>
-      <span class="helper-text">Makes main containers 100% width with a max-width constrain (Hybrid Fluid).</span>
+      <span class="setting-label">RESPONSIVENESS</span>
 
       <label class="radio-option" style="margin-top: 12px;">
         <input type="checkbox" id="useLiteralWidth">
@@ -338,14 +334,12 @@
 
     // Get Settings
     const imageExportMode = document.querySelector('input[name="imageExport"]:checked').value;
-    const mobileFluid = document.getElementById('mobileFluid').checked;
 
     parent.postMessage({
       pluginMessage: {
         type: 'generate-html-for-selection',
         payload: {
           imageExportMode, // 'placeholder' | 'base64'
-          mobileFluid,
           useLiteralWidth: document.getElementById('useLiteralWidth').checked
         }
       }

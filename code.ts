@@ -64,11 +64,9 @@ async function collectAndLoadAllFonts(nodes: readonly SceneNode[]) {
 }
 
 class FigmaPluginParser {
-  private mobileFluid = false;
   private useLiteralWidth = false;
 
-  constructor(mobileFluid: boolean, useLiteralWidth: boolean) {
-    this.mobileFluid = mobileFluid;
+  constructor(useLiteralWidth: boolean) {
     this.useLiteralWidth = useLiteralWidth;
   }
 
@@ -422,16 +420,16 @@ class FigmaPluginParser {
 
     const width = isRoot ? parentWidth : Math.min(node.width, parentWidth);
     let tableAttributes: string;
-    if (this.mobileFluid && (isRoot || width > 280)) {
-      tableAttributes = `width="100%" style="width: 100%; max-width: ${width}px; ${tableStyles || ''}"`;
+
+    // Logic for Width: Literal vs Default (100%)
+    if (this.useLiteralWidth) {
+      tableAttributes = `width="${width}" ${tableStyles ? `style="${tableStyles}"` : ''}`;
     } else {
-      if (this.useLiteralWidth) {
-        tableAttributes = `width="${width}" ${tableStyles ? `style="${tableStyles}"` : ''}`;
-      } else {
-        tableAttributes = `width="100%" ${tableStyles ? `style="width: 100%; ${tableStyles}"` : (tableStyles ? `style="${tableStyles}"` : '')}`;
-      }
-      if (bgColorHex) tableAttributes += ` bgcolor="${bgColorHex}"`; // legacy attr backup
+      // Default to 100% if not using literal width
+      tableAttributes = `width="100%" ${tableStyles ? `style="width: 100%; ${tableStyles}"` : (tableStyles ? `style="${tableStyles}"` : '')}`;
     }
+
+    if (bgColorHex) tableAttributes += ` bgcolor="${bgColorHex}"`; // legacy attr backup
 
     // --- Optimization: Merge Wrapper and Content for Vertical Layout ---
     if (layoutMode !== "HORIZONTAL") { // Stacking
@@ -462,33 +460,41 @@ class FigmaPluginParser {
     }
 
     // --- Horizontal Layout ---
-    const innerHtml = await this.renderHorizontalChildren(node as FrameNode, parentWidth, effectiveBgRgb, imageExportMode);
+    const frameNode = node as FrameNode;
+    const horizontalChildren = (frameNode.children || []).filter((c) => c.visible !== false);
+    const itemSpacing = typeof frameNode.itemSpacing === 'number' ? Math.round(frameNode.itemSpacing) : 0;
+    const paddingLeft = ('paddingLeft' in frameNode ? frameNode.paddingLeft : 0) as number;
+    const paddingRight = ('paddingRight' in frameNode ? frameNode.paddingRight : 0) as number;
 
-    // Padding for Horizontal Container
-    const paddingTopHtml = paddingTop > 0 ? `<tr><td height="${paddingTop}" style="font-size:${paddingTop}px; line-height:${paddingTop}px;">&nbsp;</td></tr>` : "";
-    const paddingBottomHtml = paddingBottom > 0 ? `<tr><td height="${paddingBottom}" style="font-size:${paddingBottom}px; line-height:${paddingBottom}px;">&nbsp;</td></tr>` : "";
+    // Calculate colspan for padding rows: children + spacers + left/right padding cells
+    const spacerCount = horizontalChildren.length > 1 ? horizontalChildren.length - 1 : 0;
+    const colSpan = horizontalChildren.length + spacerCount + (paddingLeft > 0 ? 1 : 0) + (paddingRight > 0 ? 1 : 0);
 
-    const finalInnerHtml = `${paddingTopHtml}${innerHtml ? `<tr><td>${innerHtml}</td></tr>` : ''}${paddingBottomHtml}`;
-    return `<table ${tableAttributes} cellpadding="0" cellspacing="0" border="0" role="presentation">${finalInnerHtml}</table>`;
-  }
-
-  private async renderHorizontalChildren(node: FrameNode, parentWidth: number, parentBgColor: RgbColor, imageExportMode: ImageExportMode): Promise<string> {
-    const children = (node.children || []).filter((c) => c.visible !== false);
-    const itemSpacing = typeof node.itemSpacing === 'number' ? Math.round(node.itemSpacing) : 0;
     const cells: string[] = [];
+    if (paddingLeft > 0) {
+      cells.push(`<td width="${paddingLeft}" style="width: ${paddingLeft}px;">&nbsp;</td>`);
+    }
 
-    for (const [index, child] of children.entries()) {
-      const childHtml = await this.renderNode(child, child.width, parentBgColor, imageExportMode);
+    for (const [index, child] of horizontalChildren.entries()) {
+      const childHtml = await this.renderNode(child, child.width, effectiveBgRgb, imageExportMode);
       let valign = "top";
-      if (node.counterAxisAlignItems === 'CENTER') valign = 'middle';
-      if (node.counterAxisAlignItems === 'MAX') valign = 'bottom';
+      if (frameNode.counterAxisAlignItems === 'CENTER') valign = 'middle';
+      if (frameNode.counterAxisAlignItems === 'MAX') valign = 'bottom';
       cells.push(`<td valign="${valign}">${childHtml}</td>`);
 
-      if (index < children.length - 1 && itemSpacing > 0) {
+      if (index < horizontalChildren.length - 1 && itemSpacing > 0) {
         cells.push(`<td width="${itemSpacing}" style="width: ${itemSpacing}px;">&nbsp;</td>`);
       }
     }
-    return `<table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation"><tr>${cells.join('')}</tr></table>`;
+
+    if (paddingRight > 0) {
+      cells.push(`<td width="${paddingRight}" style="width: ${paddingRight}px;">&nbsp;</td>`);
+    }
+
+    const paddingTopHtml = paddingTop > 0 ? `<tr><td height="${paddingTop}" style="font-size:${paddingTop}px; line-height:${paddingTop}px;" colspan="${colSpan}">&nbsp;</td></tr>` : "";
+    const paddingBottomHtml = paddingBottom > 0 ? `<tr><td height="${paddingBottom}" style="font-size:${paddingBottom}px; line-height:${paddingBottom}px;" colspan="${colSpan}">&nbsp;</td></tr>` : "";
+
+    return `<table ${tableAttributes} cellpadding="0" cellspacing="0" border="0" role="presentation">${paddingTopHtml}<tr>${cells.join('')}</tr>${paddingBottomHtml}</table>`;
   }
 
   private async renderText(node: TextNode, parentBgColor: RgbColor): Promise<string> {
@@ -606,7 +612,7 @@ function isBulletPoint(node: SceneNode): node is FrameNode {
 
 figma.showUI(__html__, { width: 400, height: 480 });
 
-async function processSelection(imageExportMode: ImageExportMode, mobileFluid: boolean, useLiteralWidth: boolean) {
+async function processSelection(imageExportMode: ImageExportMode, useLiteralWidth: boolean) {
   const selectedNodes = figma.currentPage.selection;
   if (selectedNodes.length === 0) {
     figma.notify("Please select at least one element.");
@@ -616,7 +622,7 @@ async function processSelection(imageExportMode: ImageExportMode, mobileFluid: b
 
   await collectAndLoadAllFonts(selectedNodes);
 
-  const parser = new FigmaPluginParser(mobileFluid, useLiteralWidth);
+  const parser = new FigmaPluginParser(useLiteralWidth);
   const html = await parser.parse(selectedNodes, imageExportMode);
 
   figma.ui.postMessage({
@@ -630,6 +636,6 @@ async function processSelection(imageExportMode: ImageExportMode, mobileFluid: b
 
 figma.ui.onmessage = async (msg: { type: string, payload: any }) => {
   if (msg.type === 'generate-html-for-selection') {
-    await processSelection(msg.payload.imageExportMode, msg.payload.mobileFluid, msg.payload.useLiteralWidth);
+    await processSelection(msg.payload.imageExportMode, msg.payload.useLiteralWidth);
   }
 };
