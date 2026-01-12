@@ -1,4 +1,4 @@
-# Figma Email HTML Plugin - Documentação
+# Figma Email HTML Plugin
 
 Esse plugin converte layouts do Figma em HTML baseado em tabelas (`<table>`), otimizado para clientes de e-mail (como Outlook, Gmail, etc). O foco é gerar um código limpo, sem "sujeira" desnecessária, e altamente compatível.
 
@@ -65,10 +65,11 @@ O plugin injeta pilhas de fontes seguras (Web Safe Fonts) automaticamente basead
 
 ## 📝 Como Usar
 1. Selecione um Frame (ou vários) no Figma.
-2. Abra o plugin (**Plugins > Convert to HTML**).
-3. Escolha se quer imagens reais (Base64) ou Placeholders.
-4. Clique em **Convert Selection**.
-5. Copie o código HTML gerado.
+2. Ajuste as preferências:
+    *   **Image Export:** Escolha entre Placeholders (leve) ou Base64 (real).
+    *   **Responsiveness:** Marque "Use Literal Width" se quiser larguras fixas em pixels; deixe desmarcado para 100% fluido.
+3. Clique em **Convert Selection**.
+4. O código aparecerá pronto para copiar.
 
 ---
 
@@ -84,9 +85,9 @@ Veja a limpeza do código gerado para um cartão simples com título, texto e im
     </td>
   </tr>
   
-  <!-- Espaçamento Vertical (Gap) -->
+  <!-- Espaçamento Vertical (Gap) com Colspan -->
   <tr>
-    <td height="24" style="height:24px; font-size:24px; line-height:24px;">&nbsp;</td>
+    <td height="24" style="height:24px; font-size:24px; line-height:24px;" colspan="3">&nbsp;</td>
   </tr>
 
   <!-- Texto com Tipografia Otimizada -->
@@ -98,6 +99,3 @@ Veja a limpeza do código gerado para um cartão simples com título, texto e im
   </tr>
 </table>
 ```
-
----
-*Documentação gerada para facilitar a manutenção e entendimento das regras de negócio aplicadas no `code.ts`.*
